@@ -28,12 +28,20 @@ import { getSoilWaterAtDepth } from './climate';
 let particles: FlowParticle[] = [];
 let nextParticleId = 1;
 
+// Global particle budget - prevents performance issues on large trees
+const MAX_TOTAL_PARTICLES = 150;
+const MAX_PARTICLES_PER_CONNECTION = 2;
+
+// Track particles per connection for fair distribution
+const connectionParticleCounts = new Map<string, number>();
+
 export function getParticles(): FlowParticle[] {
   return particles;
 }
 
 export function clearParticles(): void {
   particles = [];
+  connectionParticleCounts.clear();
 }
 
 /**
@@ -89,8 +97,7 @@ function processTranspiration(state: GameState): void {
           updateNode(node.id, { waterPressure: newPressure });
 
           // Transpiration creates demand - spawn xylem particle going TO this leaf
-          // Higher spawn rate to show continuous water movement
-          if (node.parentId && Math.random() < 0.15 + transpFactor * 0.3) {
+          if (node.parentId && Math.random() < 0.05) {
             spawnParticle(node.parentId, node.id, 'xylem', 0.8 + transpFactor * 0.5);
           }
         }
@@ -125,8 +132,7 @@ function processRootUptake(state: GameState): void {
         modifyResources({ water: uptake * 10 }); // Add to global pool
 
         // Root uptake - spawn xylem particle going UP from root
-        // Higher spawn rate to show continuous water absorption
-        if (root.parentId && Math.random() < 0.2 + soilWater * 0.2) {
+        if (root.parentId && Math.random() < 0.05) {
           spawnParticle(root.id, root.parentId, 'xylem', 0.8 + soilWater * 0.5);
         }
       }
@@ -174,9 +180,9 @@ function processXylemFlow(state: GameState): void {
     }
 
     // Ambient xylem flow - always show water movement throughout the plant
-    // This happens regardless of pressure differential
+    // Low spawn rate to stay within budget on large trees
     if (parent.waterPressure > 0.1 || node.waterPressure > 0.1) {
-      if (Math.random() < 0.12) {
+      if (Math.random() < 0.02) {
         spawnParticle(parent.id, node.id, 'xylem', 0.8);
       }
     }
@@ -237,9 +243,9 @@ function processPhloemFlow(state: GameState): void {
       }
 
       // Ambient phloem flow - sugar flows DOWN from leaves to roots
-      // In graph terms: from child (leaf) to parent (trunk/roots)
+      // Low spawn rate to stay within budget on large trees
       if (node.isActive && child.isActive) {
-        if (Math.random() < 0.1) {
+        if (Math.random() < 0.02) {
           // Flow from child toward parent (down the plant, toward roots)
           spawnParticle(child.id, node.id, 'phloem', 0.7);
         }
@@ -251,6 +257,8 @@ function processPhloemFlow(state: GameState): void {
 /**
  * Spawn a new flow particle for visualization.
  * Exported so other systems (metabolism) can spawn particles too.
+ *
+ * Uses a global budget system to prevent performance issues on large trees.
  */
 export function spawnFlowParticle(
   fromNodeId: string,
@@ -258,12 +266,16 @@ export function spawnFlowParticle(
   type: 'xylem' | 'phloem',
   speed: number
 ): void {
-  // Limit particles per connection
-  const existingCount = particles.filter(
-    (p) => p.fromNodeId === fromNodeId && p.toNodeId === toNodeId
-  ).length;
+  // Global budget check - don't spawn if at capacity
+  if (particles.length >= MAX_TOTAL_PARTICLES) return;
 
-  if (existingCount >= CONFIG.MAX_PARTICLES_PER_FLOW) return;
+  // Per-connection limit check (using cached count for O(1) lookup)
+  const connectionKey = `${fromNodeId}->${toNodeId}`;
+  const connectionCount = connectionParticleCounts.get(connectionKey) || 0;
+  if (connectionCount >= MAX_PARTICLES_PER_CONNECTION) return;
+
+  // Spawn the particle
+  connectionParticleCounts.set(connectionKey, connectionCount + 1);
 
   particles.push({
     id: `particle_${nextParticleId++}`,
@@ -289,14 +301,36 @@ function updateParticles(state: GameState): void {
     const fromNode = state.nodes[particle.fromNodeId];
     const toNode = state.nodes[particle.toNodeId];
 
-    if (!fromNode || !toNode) return false;
+    if (!fromNode || !toNode) {
+      // Decrement connection count
+      decrementConnectionCount(particle.fromNodeId, particle.toNodeId);
+      return false;
+    }
 
     // Update progress
     particle.progress += particle.speed * tickDelta;
 
     // Remove if complete
-    return particle.progress < 1.0;
+    if (particle.progress >= 1.0) {
+      decrementConnectionCount(particle.fromNodeId, particle.toNodeId);
+      return false;
+    }
+
+    return true;
   });
+}
+
+/**
+ * Decrement the particle count for a connection.
+ */
+function decrementConnectionCount(fromNodeId: string, toNodeId: string): void {
+  const connectionKey = `${fromNodeId}->${toNodeId}`;
+  const count = connectionParticleCounts.get(connectionKey) || 0;
+  if (count <= 1) {
+    connectionParticleCounts.delete(connectionKey);
+  } else {
+    connectionParticleCounts.set(connectionKey, count - 1);
+  }
 }
 
 /**

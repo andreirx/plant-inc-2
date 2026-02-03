@@ -252,3 +252,80 @@ function getDefaultRadius(type: NodeType): number {
       return 0.02;
   }
 }
+
+/**
+ * Extend a node by inserting a new segment between it and its children.
+ * This "pushes" all children one tile further away from the node.
+ * The new segment inherits the same type as the original node (TRUNK, BRANCH, ROOT).
+ */
+export function extendNode(nodeId: string, direction: Vec2): PlantNode | null {
+  const node = state.nodes[nodeId];
+  if (!node) {
+    console.warn(`extendNode: Node ${nodeId} not found`);
+    return null;
+  }
+
+  // Only extend trunk, branch, or root nodes
+  if (node.type !== 'TRUNK' && node.type !== 'BRANCH' && node.type !== 'ROOT') {
+    console.warn(`extendNode: Cannot extend ${node.type} nodes`);
+    return null;
+  }
+
+  // Need sugar to extend
+  const cost = getNodeCost(node.type);
+  if (state.resources.sugar < cost) {
+    console.warn(`extendNode: Not enough sugar (have ${state.resources.sugar}, need ${cost})`);
+    return null;
+  }
+
+  // Calculate new node position (1 tile in the given direction)
+  const tileInMeters = CONFIG.TILE_SIZE / CONFIG.PIXELS_PER_METER;
+  const newPosition: Vec2 = {
+    x: node.position.x + direction.x * tileInMeters,
+    y: node.position.y + direction.y * tileInMeters,
+  };
+
+  // Create the new node
+  const newNodeId = generateId();
+  const newNode: PlantNode = {
+    id: newNodeId,
+    type: node.type,
+    position: newPosition,
+    parentId: nodeId,
+    childrenIds: [...node.childrenIds], // Take over all children
+    radius: node.radius * 0.95, // Slightly thinner
+    structuralHealth: 1.0,
+    waterPressure: node.waterPressure * 0.98,
+    sugarConcentration: node.sugarConcentration * 0.98,
+    sugarStore: 0,
+    isActive: true,
+    stressLevel: 0,
+  };
+
+  // Update all children to point to the new node as their parent
+  for (const childId of node.childrenIds) {
+    const child = state.nodes[childId];
+    if (child) {
+      child.parentId = newNodeId;
+      // Also push child position further in the same direction
+      child.position = {
+        x: child.position.x + direction.x * tileInMeters,
+        y: child.position.y + direction.y * tileInMeters,
+      };
+    }
+  }
+
+  // The original node now only has the new node as its child
+  node.childrenIds = [newNodeId];
+
+  // Add new node to state
+  state.nodes[newNodeId] = newNode;
+  state.resources.sugar -= cost;
+
+  emit({ type: 'node:added', payload: { nodeId: newNodeId, node: newNode } });
+  emit({ type: 'resources:changed', payload: state.resources });
+
+  console.log(`Extended ${node.type} at (${node.position.x.toFixed(2)}, ${node.position.y.toFixed(2)}) in direction (${direction.x}, ${direction.y})`);
+
+  return newNode;
+}

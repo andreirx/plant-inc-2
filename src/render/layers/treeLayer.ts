@@ -22,6 +22,7 @@ interface GridCell {
   x: number;
   y: number;
   nodeId?: string; // Optional: track which node this cell belongs to
+  radius: number; // Radius for visual scaling (affects tile size)
 }
 
 let treeContainer: Container | null = null;
@@ -82,6 +83,8 @@ export function updateTreeLayer(): void {
     // Position in world coordinates
     sprite.x = cell.x * CONFIG.TILE_SIZE;
     sprite.y = cell.y * CONFIG.TILE_SIZE;
+
+    // All tiles are standard size - thicker segments occupy more tiles
     sprite.width = CONFIG.TILE_SIZE;
     sprite.height = CONFIG.TILE_SIZE;
   }
@@ -142,25 +145,54 @@ export function updateTreeLayer(): void {
 /**
  * Build a map of all grid cells occupied by tree segments.
  * This includes:
- * - Cells at each node position
+ * - Cells at each node position (multiple cells for thick nodes)
  * - Cells along paths between connected nodes
  */
 function buildOccupiedCells(nodes: Record<string, PlantNode>): Map<string, GridCell> {
   const cells = new Map<string, GridCell>();
-  let nodeCount = 0;
 
-  // Helper to add a cell
-  const addCell = (x: number, y: number, nodeId?: string): void => {
+  // Helper to add a cell with radius
+  const addCell = (x: number, y: number, radius: number, nodeId?: string): void => {
     const key = `${x},${y}`;
-    if (!cells.has(key)) {
-      cells.set(key, { x, y, nodeId });
+    const existing = cells.get(key);
+    if (!existing || radius > existing.radius) {
+      // Keep the larger radius if cell already exists
+      cells.set(key, { x, y, nodeId, radius });
+    }
+  };
+
+  // Helper to add multiple cells based on thickness
+  // Thick nodes occupy more tiles, creating wider trunks/branches
+  const addThickCell = (centerX: number, centerY: number, radius: number, nodeId?: string): void => {
+    const baseRadius = CONFIG.TRUNK_RADIUS;
+    const thicknessRatio = radius / baseRadius;
+
+    // Always add center cell
+    addCell(centerX, centerY, radius, nodeId);
+
+    // Thick (1.5x+): add horizontal neighbors for a 3-wide segment
+    if (thicknessRatio >= 1.5) {
+      addCell(centerX - 1, centerY, radius * 0.9);
+      addCell(centerX + 1, centerY, radius * 0.9);
+    }
+
+    // Very thick (2.5x+): add vertical neighbors too for a plus/cross pattern
+    if (thicknessRatio >= 2.5) {
+      addCell(centerX, centerY - 1, radius * 0.85);
+      addCell(centerX, centerY + 1, radius * 0.85);
+    }
+
+    // Extra thick (3.5x+): add corners for a 3x3 block
+    if (thicknessRatio >= 3.5) {
+      addCell(centerX - 1, centerY - 1, radius * 0.8);
+      addCell(centerX + 1, centerY - 1, radius * 0.8);
+      addCell(centerX - 1, centerY + 1, radius * 0.8);
+      addCell(centerX + 1, centerY + 1, radius * 0.8);
     }
   };
 
   // Process each node
   for (const node of Object.values(nodes)) {
-    nodeCount++;
-
     // Convert world position to grid position
     const gridX = Math.round((node.position.x * CONFIG.PIXELS_PER_METER) / CONFIG.TILE_SIZE);
     const gridY = Math.round((node.position.y * CONFIG.PIXELS_PER_METER) / CONFIG.TILE_SIZE);
@@ -168,8 +200,8 @@ function buildOccupiedCells(nodes: Record<string, PlantNode>): Map<string, GridC
     // Skip seed and leaf for cell placement (they use special tiles)
     // But still draw paths FROM them to their parents
     if (node.type !== 'SEED' && node.type !== 'LEAF') {
-      // Add cell at node position
-      addCell(gridX, gridY, node.id);
+      // Add cells at node position - multiple cells for thick nodes
+      addThickCell(gridX, gridY, node.radius, node.id);
     }
 
     // Draw path from this node to its parent (for ALL node types except seed)
@@ -179,15 +211,11 @@ function buildOccupiedCells(nodes: Record<string, PlantNode>): Map<string, GridC
         const parentGridX = Math.round((parent.position.x * CONFIG.PIXELS_PER_METER) / CONFIG.TILE_SIZE);
         const parentGridY = Math.round((parent.position.y * CONFIG.PIXELS_PER_METER) / CONFIG.TILE_SIZE);
 
-        // Fill in cells along the path using Bresenham-style line
-        fillPathCells(addCell, gridX, gridY, parentGridX, parentGridY);
+        // Fill in cells along the path, interpolating radius
+        const avgRadius = (node.radius + parent.radius) / 2;
+        fillPathCells((x, y) => addCell(x, y, avgRadius), gridX, gridY, parentGridX, parentGridY);
       }
     }
-  }
-
-  // Debug: log cell count occasionally
-  if (cells.size > 0 && Math.random() < 0.01) {
-    console.log(`buildOccupiedCells: ${nodeCount} nodes -> ${cells.size} cells`);
   }
 
   return cells;

@@ -14,6 +14,7 @@ import { getState, setPaused, setSpeedMultiplier, subscribe } from '@core/state'
 import { getFlowStats } from '@core/systems/hydraulics';
 import { getMetabolismStats } from '@core/systems/metabolism';
 import { setCameraZoom, getCameraZoom, centerCamera } from '@render/app';
+import { setAutoGrow, isAutoGrowEnabled } from '@core/systems/autogrow';
 
 let hudElement: HTMLElement | null = null;
 let statsElement: HTMLElement | null = null;
@@ -102,20 +103,36 @@ function createControls(): void {
     const btn = document.createElement('button');
     btn.textContent = `${speed}x`;
     btn.style.cssText = getButtonStyle(speed === 1);
+    btn.dataset.speed = String(speed);
     btn.addEventListener('click', () => {
       setSpeedMultiplier(speed);
       // Update button styles
-      controlsElement?.querySelectorAll('button').forEach((b, i) => {
-        if (i > 0) {
-          // Skip pause button
-          (b as HTMLButtonElement).style.cssText = getButtonStyle(
-            speeds[i - 1] === speed
-          );
-        }
+      controlsElement?.querySelectorAll('button[data-speed]').forEach((b) => {
+        const btnSpeed = parseFloat((b as HTMLButtonElement).dataset.speed || '0');
+        (b as HTMLButtonElement).style.cssText = getButtonStyle(btnSpeed === speed);
       });
     });
     controlsElement.appendChild(btn);
   }
+
+  // Add separator
+  const separator = document.createElement('span');
+  separator.style.cssText = 'margin: 0 8px; color: #555;';
+  separator.textContent = '|';
+  controlsElement.appendChild(separator);
+
+  // Auto-grow toggle
+  const autoGrowBtn = document.createElement('button');
+  autoGrowBtn.id = 'autogrow-btn';
+  autoGrowBtn.textContent = '🌱 Auto-Grow: OFF';
+  autoGrowBtn.style.cssText = getButtonStyle(false);
+  autoGrowBtn.addEventListener('click', () => {
+    const newState = !isAutoGrowEnabled();
+    setAutoGrow(newState);
+    autoGrowBtn.textContent = newState ? '🌱 Auto-Grow: ON' : '🌱 Auto-Grow: OFF';
+    autoGrowBtn.style.cssText = getButtonStyle(newState);
+  });
+  controlsElement.appendChild(autoGrowBtn);
 }
 
 /**

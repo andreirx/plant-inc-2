@@ -10,6 +10,7 @@ import { CONFIG } from './config';
 import { updateClimateSystem } from './systems/climate';
 import { updateHydraulics } from './systems/hydraulics';
 import { updateMetabolism } from './systems/metabolism';
+import { updateAutoGrow } from './systems/autogrow';
 
 const TICK_INTERVAL = 1000 / CONFIG.TICKS_PER_SECOND;
 
@@ -87,7 +88,10 @@ function tick(): void {
   // 3. Metabolism produces/consumes resources
   updateMetabolism();
 
-  // 4. Increment tick counter
+  // 4. Auto-grow (if enabled)
+  updateAutoGrow();
+
+  // 5. Increment tick counter
   incrementTick();
 }
 

@@ -6,12 +6,12 @@
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { getState, addNode, updateNode } from '@core/state';
+import { getState, addNode, updateNode, extendNode } from '@core/state';
 import { CONFIG } from '@core/config';
 import type { PlantNode, NodeType, Vec2 } from '@core/types';
 import { getChildren } from '@utils/graph';
 
-type GrowthType = NodeType | 'THICKEN';
+type GrowthType = NodeType | 'THICKEN' | 'EXTEND';
 
 interface GrowthOption {
   gridX: number;
@@ -20,7 +20,8 @@ interface GrowthOption {
   type: GrowthType;
   cost: number;
   label: string;
-  isSpecial?: boolean; // For non-growth actions like THICKEN
+  isSpecial?: boolean; // For non-growth actions like THICKEN, EXTEND
+  direction?: Vec2; // Direction for EXTEND action
 }
 
 let highlightContainer: Container | null = null;
@@ -208,6 +209,39 @@ function calculateGrowthOptions(node: PlantNode, state: ReturnType<typeof getSta
     }
   }
 
+  // Add EXTEND option for trunk/branch/root nodes with children
+  // This pushes all children further away, elongating the stem
+  if (node.type === 'TRUNK' || node.type === 'BRANCH' || node.type === 'ROOT') {
+    if (node.childrenIds.length > 0) {
+      const extendCost = node.type === 'ROOT' ? CONFIG.COST_ROOT : CONFIG.COST_TRUNK;
+      if (state.resources.sugar >= extendCost) {
+        // Determine extension direction based on node type
+        // Trunks/branches extend upward, roots extend downward
+        const extendDir: Vec2 = node.type === 'ROOT' ? { x: 0, y: 1 } : { x: 0, y: -1 };
+        const extendGridX = nodeGridX + extendDir.x;
+        const extendGridY = nodeGridY + extendDir.y;
+        const extendKey = `${extendGridX},${extendGridY}`;
+
+        // Only offer if the extension position is free
+        if (!occupied.has(extendKey)) {
+          options.push({
+            gridX: extendGridX,
+            gridY: extendGridY,
+            worldPos: {
+              x: (extendGridX * CONFIG.TILE_SIZE) / CONFIG.PIXELS_PER_METER,
+              y: (extendGridY * CONFIG.TILE_SIZE) / CONFIG.PIXELS_PER_METER,
+            },
+            type: 'EXTEND',
+            cost: extendCost,
+            label: 'Extend',
+            isSpecial: true,
+            direction: extendDir,
+          });
+        }
+      }
+    }
+  }
+
   return options;
 }
 
@@ -238,6 +272,16 @@ function executeGrowth(option: GrowthOption): void {
     return;
   }
 
+  // Handle special EXTEND action
+  if (option.type === 'EXTEND' && option.direction) {
+    const newNode = extendNode(selectedNodeId, option.direction);
+    if (newNode) {
+      console.log(`Extended node, created ${newNode.type} at (${newNode.position.x.toFixed(2)}, ${newNode.position.y.toFixed(2)})`);
+      showGrowthOptions(selectedNodeId);
+    }
+    return;
+  }
+
   // Add the new node (for normal growth types)
   const newNode = addNode(selectedNodeId, option.type as NodeType, option.worldPos);
 
@@ -263,6 +307,8 @@ function getHighlightColor(type: GrowthType): number {
       return 0xd2691e; // Chocolate
     case 'THICKEN':
       return 0xffd700; // Gold - stands out as special action
+    case 'EXTEND':
+      return 0x00ffff; // Cyan - distinct color for extend action
     default:
       return 0xffffff;
   }
